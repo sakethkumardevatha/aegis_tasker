@@ -1,0 +1,12 @@
+# Secrets and API Keys
+.env
+
+# Docker files we don't need in the repo
+.dockerignore
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Local data (Optional: keep this if you want your roadmap on GitHub)
+# roadmap.json
