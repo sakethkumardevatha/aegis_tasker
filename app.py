@@ -1,146 +1,116 @@
 import streamlit as st
-import json
-import os
 import time
-from database import load_data, save_data, update_task_status, update_task_details, delete_task
-from agent_logic import classify_task_with_ai
+from database import load_data, save_data, complete_mission_logic, add_side_quest, complete_side_quest_logic
+from agent_logic import generate_rpg_side_quest
 
-# --- PAGE CONFIG ---
-st.set_page_config(
-    page_title="Aegis OS | AI Engineer Tracker",
-    page_icon="🛡️",
-    layout="wide"
-)
+st.set_page_config(page_title="Aegis Map OS", page_icon="🛡️", layout="wide")
 
-# --- DATA INITIALIZATION ---
+# Read state
 data = load_data()
+stats = data.get("player_stats", {"level": 1, "current_xp": 0, "next_level_xp": 100, "title": "Novice"})
 
-# --- HELPER FUNCTIONS ---
-def calculate_metrics(data):
-    total = 0
-    done = 0
-    for day_id in data:
-        tasks = data[day_id].get("tasks", [])
-        for task in tasks:
-            total += 1
-            if task.get("status") == "done":
-                done += 1
-    return done, total
+# --- SIDEBAR: HERO PROFILE ---
+st.sidebar.title("🛡️ Hero Profile")
+st.sidebar.markdown(f"### **{stats['title']}**")
+st.sidebar.metric("Current Level", f"LVL {stats['level']}")
 
-# --- SIDEBAR: GLOBAL PROGRESS ---
-st.sidebar.title("🛡️ Aegis OS")
-st.sidebar.caption("90-Day AI Engineering Grind")
+# Level Progress Tracker
+progress_percentage = min(1.0, stats["current_xp"] / stats["next_level_xp"])
+st.sidebar.progress(progress_percentage)
+st.sidebar.caption(f"XP: {stats['current_xp']} / {stats['next_level_xp']} to Next Level")
 
-done_count, total_count = calculate_metrics(data)
-
-if total_count > 0:
-    progress_val = done_count / total_count
-    st.sidebar.metric("Global Progress", f"{int(progress_val * 100)}%", f"{done_count}/{total_count} Tasks")
-    st.sidebar.progress(progress_val)
-else:
-    st.sidebar.warning("Roadmap file empty or not found.")
+# Map Directory Processing
+territories = data.get("territories", {})
+unlocked_territories = {k: v for k, v in territories.items() if v["status"] == "unlocked"}
+locked_territories = {k: v for k, v in territories.items() if v["status"] == "locked"}
 
 st.sidebar.divider()
-day_keys = sorted(data.keys(), key=lambda x: int(x) if x.isdigit() else x)
-selected_day = st.sidebar.selectbox("📅 Select Day", day_keys)
+st.sidebar.subheader("🗺️ Map Navigation")
+selected_t_id = st.sidebar.selectbox("Travel To:", list(unlocked_territories.keys()), format_func=lambda x: territories[x]["name"])
 
-# --- MAIN INTERFACE ---
-if selected_day:
-    day_data = data[selected_day]
-    day_tasks = day_data.get('tasks', [])
+# --- MAIN WORKSPACE ---
+st.title("🗺️ The Realms of Aegis: Quest Tracker")
+
+# 1. Main Unlocked Mission Hub
+if selected_t_id:
+    t_data = territories[selected_t_id]
+    st.header(t_data["name"])
+    st.info(f"**Zone Focus:** {t_data['focus']}\n\n*{t_data['description']}*")
     
-    # Header Section
-    col_title, col_stat = st.columns([3, 1])
-    with col_title:
-        st.title(f"Day {selected_day}: {day_data['focus']}")
-        st.write(f"**Date:** {day_data.get('date', 'N/A')}")
+    st.subheader("🎯 Active Territory Missions")
     
-    with col_stat:
-        day_done = sum(1 for t in day_tasks if t['status'] == 'done')
-        day_total = len(day_tasks)
-        st.metric("Day Progress", f"{day_done}/{day_total}")
-
-    # Edit Mode Toggle
-    edit_mode = st.toggle("🔧 Edit Mode", help="Enable to modify descriptions or delete tasks")
-    st.divider()
-
-    # --- TASK LIST ---
-    for i, task in enumerate(day_tasks):
+    for i, mission in enumerate(t_data.get("missions", [])):
         with st.container():
-            if edit_mode:
-                # CRUD: Update & Delete Layout
-                c1, c2, c3 = st.columns([2, 3, 1])
-                with c1:
-                    new_topic = st.text_input("Topic", value=task['topic'], key=f"edit_top_{selected_day}_{i}")
-                with c2:
-                    new_action = st.text_input("Action", value=task['action'], key=f"edit_act_{selected_day}_{i}")
-                with c3:
-                    st.write("Actions")
-                    sub_col1, sub_col2 = st.columns(2)
-                    if sub_col1.button("💾", key=f"save_{selected_day}_{i}", help="Save changes"):
-                        update_task_details(selected_day, i, new_topic, new_action)
-                        st.toast("Task Updated!")
-                        st.rerun()
-                    if sub_col2.button("🗑️", key=f"del_{selected_day}_{i}", help="Delete task"):
-                        delete_task(selected_day, i)
-                        st.toast("Task Deleted")
-                        st.rerun()
-            else:
-                # CRUD: Read & Status Update Layout
-                c1, c2, c3 = st.columns([0.5, 4, 1])
-                with c1:
-                    is_completed = (task['status'] == "done")
-                    if st.checkbox("", value=is_completed, key=f"chk_{selected_day}_{i}"):
-                        if not is_completed:
-                            update_task_status(selected_day, i, "done")
+            col_box, col_txt, col_badge = st.columns([0.4, 4.5, 1.2])
+            
+            with col_box:
+                m_status = mission["status"]
+                if m_status == "done":
+                    st.write("✅")
+                elif m_status == "locked":
+                    st.write("🔒")
+                else:
+                    if st.checkbox("", key=f"mis_{selected_t_id}_{i}"):
+                        success, xp = complete_mission_logic(selected_t_id, i)
+                        if success:
+                            st.toast(f"Objective Accomplished! +{xp} XP Earned")
+                            time.sleep(0.5)
                             st.rerun()
-                    else:
-                        if is_completed:
-                            update_task_status(selected_day, i, "pending")
-                            st.rerun()
+            
+            with col_txt:
+                type_emoji = "⚔️" if mission["type"] == "Boss Battle" else "🏹"
+                st.markdown(f"**{type_emoji} [{mission['type']}] {mission['topic']}**")
+                st.write(mission["objective"])
                 
-                with c2:
-                    emoji = {"DSA": "🔴", "ML Theory": "🔵", "ML Math": "🟢", "Project": "🟣", "Tools": "🟠"}.get(task['subject'], "⚪")
-                    st.markdown(f"**{emoji} {task['subject']}**: {task['topic']}")
-                    st.caption(f"🎯 {task['action']}")
-                
-                with c3:
-                    if task['status'] == "done":
-                        st.success("COMPLETE")
-                    else:
-                        st.info("PENDING")
-        
-        st.write("") # Spacing between task rows
+            with col_badge:
+                if m_status == "done":
+                    st.success("CONQUERED")
+                elif m_status == "locked":
+                    st.caption("Prerequisites Required")
+                else:
+                    st.warning(f"💎 {mission['xp_reward']} XP")
+        st.divider()
 
-    # --- AI AGENT HUB: CREATE ---
-    st.divider()
-    st.subheader("🤖 Aegis Intelligence: Quick Add")
-    
-    with st.expander("Add Custom Task via Groq Llama-3"):
-        user_input = st.text_input("Describe your task:", placeholder="e.g., Build a vector database indexer")
-        
-        if st.button("Analyze & Inject"):
-            if user_input:
-                with st.spinner("Classifying with Groq AI..."):
-                    ai_category = classify_task_with_ai(user_input)
-                    
-                    new_task_obj = {
-                        "id": int(time.time()),
-                        "time": "Extra",
-                        "subject": ai_category,
-                        "topic": user_input,
-                        "action": "Custom task added via AI Agent.",
-                        "status": "pending"
-                    }
-                    
-                    data[selected_day]["tasks"].append(new_task_obj)
-                    save_data(data)
-                    st.success(f"Task classified as {ai_category} and added!")
-                    time.sleep(1)
-                    st.rerun()
+# 2. Side Quest Hub (Low Pressure Valve Component)
+st.subheader("🎲 Available Side Quests")
+active_sides = [q for q in data.get("side_quests", []) if q["status"] == "pending"]
 
+if active_sides:
+    for idx, sq in enumerate(data.get("side_quests", [])):
+        if sq["status"] == "pending":
+            c1, c2, c3 = st.columns([0.5, 4.5, 1])
+            with c1:
+                if st.checkbox("", key=f"side_chk_{idx}"):
+                    success, xp = complete_side_quest_logic(idx)
+                    if success:
+                        st.toast(f"Side Quest Complete! +{xp} XP")
+                        time.sleep(0.5)
+                        st.rerun()
+            with c2:
+                st.markdown(f"**🔹 Mini Mission**")
+                st.write(sq["objective"])
+            with c3:
+                st.info(f"💎 {sq['xp_reward']} XP")
 else:
-    st.info("Select a day from the sidebar to view your roadmap.")
+    st.caption("No active side quests in your log. Generate one below if you face a mental roadblock.")
 
-st.sidebar.divider()
-st.sidebar.caption("Containerized AI Development Environment v1.0")
+# 3. Dynamic RPG Interaction Layer
+with st.expander("🔮 Summon the Game Master"):
+    st.write("Brain frozen or feeling stuck? Describe what field is confusing you, and the Game Master will output a 10-minute simple task.")
+    input_topic = st.text_input("Enter topic or feeling:", placeholder="e.g., I don't understand container separation")
+    
+    if st.button("Generate Low-Pressure Task"):
+        if input_topic:
+            with st.spinner("Formulating directive..."):
+                quest_details = generate_rpg_side_quest(input_topic)
+                add_side_quest(quest_details)
+                st.success("New Quest added to your action log above!")
+                time.sleep(1)
+                st.rerun()
+
+# 4. Map Display Meta Section (Fog of War Visualization)
+if locked_territories:
+    st.sidebar.divider()
+    st.sidebar.subheader("🌫️ Fog of War (Locked)")
+    for lt in locked_territories.values():
+        st.sidebar.caption(f"🔒 {lt['name']}")
